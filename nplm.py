@@ -139,18 +139,7 @@ class nplm:
 # ==================== END OF NPLM CLASS DEF ====================
 
 def dump_matrix(m, model_file):
-    shape = m.shape
-    if len(shape) == 1:
-      shape = (shape[0], 1)
-
-    index = 0
-    for i in range(0, shape[0]):
-      model_file.write("{0:.6f}".format(m.take(index)))
-      for j in range(1, shape[1]):
-        index += 1
-        model_file.write('\t')
-        model_file.write("{0:.6f}".format(m.take(index)))
-      model_file.write('\n')
+    np.savetxt(model_file, m, fmt="%.6f", delimiter='\t')
 
 def dump(net, model_dir, options, vocab):
     model_file = open(model_dir, 'w')
@@ -158,7 +147,7 @@ def dump(net, model_dir, options, vocab):
     # config
     model_file.write("\\config\n")
     model_file.write("version 1\n")
-    model_file.write("ngram_size {0}\n".format(options.n_gram))
+    model_file.write("ngram_size {0}\n".format(options.n_gram + 1))
     model_file.write("input_vocab_size {0}\n".format(options.vocab_size))
     model_file.write("output_vocab_size {0}\n".format(options.vocab_size))
     model_file.write("input_embedding_dimension {0}\n".format(options.word_dim))
@@ -180,12 +169,12 @@ def dump(net, model_dir, options, vocab):
 
     # input_embeddings
     model_file.write("\\input_embeddings\n")
-    dump_matrix(D.T, model_file)
+    dump_matrix(D, model_file)
     model_file.write("\n")
 
     # hidden_weights 1
     model_file.write("\\hidden_weights 1\n")
-    dump_matrix(C.T, model_file)
+    dump_matrix(np.transpose(C), model_file)
     model_file.write("\n")
 
     # hidden_biases 1
@@ -195,7 +184,7 @@ def dump(net, model_dir, options, vocab):
 
     # hidden_weights 2
     model_file.write("\\hidden_weights 2\n")
-    dump_matrix(M.T, model_file)
+    dump_matrix(np.transpose(M), model_file)
     model_file.write("\n")
 
     # hidden_biases 2
@@ -205,7 +194,7 @@ def dump(net, model_dir, options, vocab):
 
     # output_weights
     model_file.write("\\output_weights\n")
-    dump_matrix(E, model_file)
+    dump_matrix(np.transpose(E), model_file)
     model_file.write("\n")
 
     # output_biases
@@ -237,6 +226,9 @@ def sgd(indexed_ngrams, predictions, net, options, epoch, noise_dist):
   logging.info("epoch {0} finished".format(epoch))
 
 def main(options):
+
+  options.n_gram -= 1
+
   # make training dir
   if not (os.path.isdir(options.working_dir) or os.path.exists(options.working_dir)):
     os.makedirs(options.working_dir)
