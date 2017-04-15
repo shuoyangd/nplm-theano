@@ -10,6 +10,7 @@ import os.path
 import sys
 
 import numpy as np
+import tables
 import theano
 import theano.tensor as T
 
@@ -43,6 +44,7 @@ parser.add_argument("--n-gram", "-n", dest="n_gram", type=int, metavar="INT", he
 parser.add_argument("--max-epoch", dest="max_epoch", type=int, metavar="INT", help="Maximum number of epochs should be performed during training (default = 5).")
 parser.add_argument("--batch-size", "-b", dest="batch_size", type=int, metavar="INT", help="Batch size (in sentences) of SGD (default = 1000).")
 parser.add_argument("--save-interval", dest="save_interval", type=int, metavar="INT", help="Saving model only for every several epochs (default = 1).")
+parser.add_argument("--mmap", dest="mmap", action='store_true', help="Create a memory-mapped diskfile for the training data. Incurs a minor slow-down but significantly reduces memory usage (default = False).")
 
 parser.set_defaults(
   decay_rate=0.95,
@@ -55,7 +57,8 @@ parser.set_defaults(
   n_gram=5,
   max_epoch=5,
   batch_size=1000,
-  save_interval=1)
+  save_interval=1,
+  mmap=False)
 
 if theano.config.floatX=='float32':
   floatX = np.float32
@@ -205,17 +208,25 @@ def dump(net, model_dir, options, vocab):
     model_file.write("\\end")
     model_file.close()
 
-def sgd(indexed_ngrams, predictions, net, options, epoch, noise_dist):
+def shuffle(indexed_ngrams, predictions):
+  logging.info("shuffling data... ")
+  arr = np.arange(len(indexed_ngrams))
+  np.random.shuffle(arr)
+  indexed_ngrams_shuffled = indexed_ngrams[arr, :]
+  predictions_shuffled = predictions[arr]
+  return (indexed_ngrams_shuffled, predictions_shuffled)
+
+def sgd(indexed_ngrams, predictions, net, options, epoch, noise_dist, nu_instances):
   logging.info("epoch {0} started".format(epoch))  
   instance_count = 0
   batch_count = 0
   # for performance issue, if the remaining data is smaller than batch_size, we will just discard them
-  for start in range(0, len(indexed_ngrams), options.batch_size):
-    if len(indexed_ngrams) - start >= options.batch_size:
+  for start in xrange(0, nu_instances, options.batch_size):
+    if nu_instances - start >= options.batch_size:
       X = indexed_ngrams[start: start + options.batch_size]
       Y = predictions[start: start + options.batch_size]
       N = np.array(rand.distint(noise_dist, (options.noise_sample_size,)), dtype='int64') # (batch_size, noise_sample_size)
-      net.train(X, Y, N)
+      # net.train(X, Y, N)
       instance_count += options.batch_size
       batch_count += 1
       if batch_count % 1 == 0:
@@ -224,6 +235,28 @@ def sgd(indexed_ngrams, predictions, net, options, epoch, noise_dist):
   # total_loss = net.compute_loss(indexed_ngrams, predictions)
   # logging.info("epoch {0} finished with NCE loss {1}".format(epoch, total_loss))
   logging.info("epoch {0} finished".format(epoch))
+
+def create_mmap_reader(var, name, working_dir):
+  logging.info("creating memory map to variable {0}".format(name))
+
+  mapping_path = working_dir + '/' + name
+  writer_mmap = np.memmap(mapping_path, dtype=np.array(var).dype, mode='write', shape=np.array(var).shape)
+  writer_mmap[:] = var[:]
+  del writer_mmap
+
+  return np.memmap(mapping_path, dtype=dtype, mode='r', shape=np.array(var).shape)
+
+def create_tables_reader(var, name, working_dir):
+  logging.info("creating memory map to variable {0} with tables".format(name))
+
+  mapping_path = working_dir + '/' + name
+  writer_mmap = tables.open_file(mapping_path, mode='w')
+  atom = tables.Atom.from_dtype(np.array(var).dtype)
+  ds = writer_mmap.create_carray(writer_mmap.root, name, atom, np.array(var).shape)
+  ds[:] = var
+  writer_mmap.close()
+
+  return eval("tables.open_file(mapping_path, mode='r').root.{0}".format(name))
 
 def main(options):
 
@@ -259,7 +292,7 @@ def main(options):
 
   # build quick vocab indexer
   v2i = {}
-  for i in range(len(vocab)):
+  for i in xrange(len(vocab)):
     v2i[vocab[i]] = i
 
   total_unigram_count = floatX(sum(unigram_count.values()))
@@ -283,8 +316,36 @@ def main(options):
       .format(options.word_dim, options.hidden_dim1, options.hidden_dim2, options.noise_sample_size))
   net = nplm(options.n_gram, len(vocab), options.word_dim, options.hidden_dim1, options.hidden_dim2,
       options.noise_sample_size, options.batch_size, options.decay_rate, options.epsilon, unigram_dist)
+  nu_instances = len(indexed_ngrams)
   for epoch in range(1, options.max_epoch + 1):
-    sgd(indexed_ngrams, predictions, net, options, epoch, unigram_dist)
+    (indexed_ngrams, predictions) = shuffle(np.array(indexed_ngrams), np.array(predictions))
+
+    # create mmap if requested
+    if options.mmap:
+
+      # build hdf5 dump
+      indexed_ngrams_mmap = create_tables_reader(indexed_ngrams, "indexed_ngrams", \
+          options.working_dir)
+      predictions_mmap = create_tables_reader(predictions, "predictions", \
+          options.working_dir)
+
+      # free huge memory space
+      del indexed_ngrams
+      del predictions
+
+      sgd(indexed_ngrams_mmap, predictions_mmap, net, options, epoch, unigram_dist, nu_instances)
+
+      # re-load data for shuffling
+      indexed_ngrams[:] = indexed_ngrams_mmap[:]
+      predictions[:] = predictions_mmap[:]
+      
+      # delete shuffled data used for this iteration
+      del indexed_ngrams_mmap
+      del predictions_mmap
+
+    else:
+      sgd(indexed_ngrams, predictions, net, options, epoch, unigram_dist, nu_instances)
+
     if epoch % options.save_interval == 0:
         logging.info("dumping models")
     	dump(net, options.working_dir + "/nplm.model." + str(epoch), options, vocab)
