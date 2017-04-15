@@ -236,16 +236,6 @@ def sgd(indexed_ngrams, predictions, net, options, epoch, noise_dist, nu_instanc
   # logging.info("epoch {0} finished with NCE loss {1}".format(epoch, total_loss))
   logging.info("epoch {0} finished".format(epoch))
 
-def create_mmap_reader(var, name, working_dir):
-  logging.info("creating memory map to variable {0}".format(name))
-
-  mapping_path = working_dir + '/' + name
-  writer_mmap = np.memmap(mapping_path, dtype=np.array(var).dype, mode='write', shape=np.array(var).shape)
-  writer_mmap[:] = var[:]
-  del writer_mmap
-
-  return np.memmap(mapping_path, dtype=dtype, mode='r', shape=np.array(var).shape)
-
 def create_tables_reader(var, name, working_dir):
   logging.info("creating memory map to variable {0} with tables".format(name))
 
