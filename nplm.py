@@ -246,7 +246,7 @@ def create_tables_reader(var, name, working_dir):
   ds[:] = var
   writer_mmap.close()
 
-  return eval("tables.open_file(mapping_path, mode='r').root.{0}".format(name))
+  return eval("tables.open_file(mapping_path, mode='r')")
 
 def main(options):
 
@@ -314,10 +314,13 @@ def main(options):
     if options.mmap:
 
       # build hdf5 dump
-      indexed_ngrams_mmap = create_tables_reader(indexed_ngrams, "indexed_ngrams", \
+      indexed_ngrams_mmap_file = create_tables_reader(indexed_ngrams, "indexed_ngrams", \
           options.working_dir)
-      predictions_mmap = create_tables_reader(predictions, "predictions", \
+      predictions_mmap_file = create_tables_reader(predictions, "predictions", \
           options.working_dir)
+
+      indexed_ngrams_mmap = indexed_ngrams_mmap_file.root.indexed_ngrams;
+      predictions_mmap = predictions_mmap_file.root.predictions;
 
       # free huge memory space
       del indexed_ngrams
@@ -326,8 +329,11 @@ def main(options):
       sgd(indexed_ngrams_mmap, predictions_mmap, net, options, epoch, unigram_dist, nu_instances)
 
       # re-load data for shuffling
-      indexed_ngrams[:] = indexed_ngrams_mmap[:]
-      predictions[:] = predictions_mmap[:]
+      indexed_ngrams = indexed_ngrams_mmap[:]
+      predictions = predictions_mmap[:]
+
+      indexed_ngrams_mmap_file.close()
+      predictions_mmap_file.close()
       
       # delete shuffled data used for this iteration
       del indexed_ngrams_mmap
