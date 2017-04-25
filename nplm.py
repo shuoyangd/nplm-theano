@@ -44,7 +44,6 @@ parser.add_argument("--n-gram", "-n", dest="n_gram", type=int, metavar="INT", he
 parser.add_argument("--max-epoch", dest="max_epoch", type=int, metavar="INT", help="Maximum number of epochs should be performed during training (default = 5).")
 parser.add_argument("--batch-size", "-b", dest="batch_size", type=int, metavar="INT", help="Batch size (in sentences) of SGD (default = 1000).")
 parser.add_argument("--save-interval", dest="save_interval", type=int, metavar="INT", help="Saving model only for every several epochs (default = 1).")
-parser.add_argument("--mmap", dest="mmap", action='store_true', help="Create a memory-mapped diskfile for the training data. Incurs a minor slow-down but significantly reduces memory usage (default = False).")
 
 parser.set_defaults(
   decay_rate=0.95,
@@ -57,8 +56,7 @@ parser.set_defaults(
   n_gram=5,
   max_epoch=5,
   batch_size=1000,
-  save_interval=1,
-  mmap=False)
+  save_interval=1)
 
 if theano.config.floatX=='float32':
   floatX = np.float32
@@ -216,19 +214,25 @@ def shuffle(indexed_ngrams, predictions):
   predictions_shuffled = predictions[arr]
   return (indexed_ngrams_shuffled, predictions_shuffled)
 
-def sgd(indexed_ngrams, predictions, net, options, epoch, noise_dist, nu_instances):
+def sgd(examples, net, options, epoch, noise_dist):
   logging.info("epoch {0} started".format(epoch))  
   instance_count = 0
   batch_count = 0
   # for performance issue, if the remaining data is smaller than batch_size, we will just discard them
-  for start in xrange(0, nu_instances, options.batch_size):
-    if nu_instances - start >= options.batch_size:
-      X = indexed_ngrams[start: start + options.batch_size]
-      Y = predictions[start: start + options.batch_size]
+  X = []
+  Y = []
+  for example in examples:
+    X.append(example[0])
+    Y.append(example[1])
+    instance_count += 1
+    if instance_count % options.batch_size == 0:
+      X = np.array(X)
+      Y = np.array(Y)
       N = np.array(rand.distint(noise_dist, (options.noise_sample_size,)), dtype='int64') # (batch_size, noise_sample_size)
-      # net.train(X, Y, N)
-      instance_count += options.batch_size
+      net.train(X, Y, N)
       batch_count += 1
+      X = []
+      Y = []
       if batch_count % 1 == 0:
         logging.info("{0} instances seen".format(instance_count))
   # N = np.array(rand.distint(noise_dist, (len(indexed_ngrams), options.noise_sample_size)))
@@ -236,17 +240,14 @@ def sgd(indexed_ngrams, predictions, net, options, epoch, noise_dist, nu_instanc
   # logging.info("epoch {0} finished with NCE loss {1}".format(epoch, total_loss))
   logging.info("epoch {0} finished".format(epoch))
 
-def create_tables_reader(var, name, working_dir):
-  logging.info("creating memory map to variable {0} with tables".format(name))
-
-  mapping_path = working_dir + '/' + name
-  writer_mmap = tables.open_file(mapping_path, mode='w')
-  atom = tables.Atom.from_dtype(np.array(var).dtype)
-  ds = writer_mmap.create_carray(writer_mmap.root, name, atom, np.array(var).shape)
-  ds[:] = var
-  writer_mmap.close()
-
-  return eval("tables.open_file(mapping_path, mode='r')")
+def create_lazy_examples(trnz, bos_index):
+  len_trnz = len(trnz)
+  for linen in rand.shuffled_xrange(0, len_trnz):
+    numberized_line = trnz[linen]
+    indexed_sentence = [bos_index] * (options.n_gram - 2)
+    indexed_sentence.extend(numberized_line)
+    for start in range(len(indexed_sentence) - options.n_gram):
+      yield (indexed_sentence[start: start + options.n_gram], indexed_sentence[start + options.n_gram])
 
 def main(options):
 
@@ -265,8 +266,8 @@ def main(options):
   predictions = []
   nz = numberizer(limit = options.vocab_size, unk = UNK, bos = BOS, eos = EOS)
   (trnz, vocab, unigram_count) = nz.numberize(options.training_file)
-  bos_index = vocab.index(BOS)
-  eos_index = vocab.index(EOS)
+  
+  """
   for numberized_line in trnz:
     # think of a sentence with only 1 word w0 and we are extracting trigrams (n_gram = 3):
     # the numerized version would be "<s> w0 </s>".
@@ -279,6 +280,7 @@ def main(options):
       if start + options.n_gram < len(indexed_sentence):
         predictions.append(indexed_sentence[start + options.n_gram])
   del trnz
+  """
 
   # build quick vocab indexer
   v2i = {}
@@ -306,42 +308,10 @@ def main(options):
       .format(options.word_dim, options.hidden_dim1, options.hidden_dim2, options.noise_sample_size))
   net = nplm(options.n_gram, len(vocab), options.word_dim, options.hidden_dim1, options.hidden_dim2,
       options.noise_sample_size, options.batch_size, options.decay_rate, options.epsilon, unigram_dist)
-  nu_instances = len(indexed_ngrams)
+  bos_index = vocab.index(BOS)
   for epoch in range(1, options.max_epoch + 1):
-    (indexed_ngrams, predictions) = shuffle(np.array(indexed_ngrams), np.array(predictions))
-
-    # create mmap if requested
-    if options.mmap:
-
-      # build hdf5 dump
-      indexed_ngrams_mmap_file = create_tables_reader(indexed_ngrams, "indexed_ngrams", \
-          options.working_dir)
-      predictions_mmap_file = create_tables_reader(predictions, "predictions", \
-          options.working_dir)
-
-      indexed_ngrams_mmap = indexed_ngrams_mmap_file.root.indexed_ngrams;
-      predictions_mmap = predictions_mmap_file.root.predictions;
-
-      # free huge memory space
-      del indexed_ngrams
-      del predictions
-
-      sgd(indexed_ngrams_mmap, predictions_mmap, net, options, epoch, unigram_dist, nu_instances)
-
-      # re-load data for shuffling
-      indexed_ngrams = indexed_ngrams_mmap[:]
-      predictions = predictions_mmap[:]
-
-      indexed_ngrams_mmap_file.close()
-      predictions_mmap_file.close()
-      
-      # delete shuffled data used for this iteration
-      del indexed_ngrams_mmap
-      del predictions_mmap
-
-    else:
-      sgd(indexed_ngrams, predictions, net, options, epoch, unigram_dist, nu_instances)
-
+    examples = create_lazy_examples(trnz, bos_index) 
+    sgd(examples, net, options, epoch, unigram_dist)
     if epoch % options.save_interval == 0:
         logging.info("dumping models")
     	dump(net, options.working_dir + "/nplm.model." + str(epoch), options, vocab)
