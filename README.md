@@ -9,7 +9,6 @@ nplm-theano is a re-implementation of the Neural Probablistic Language Model too
 
 + theano >= 0.8.0
 + lasagna >= 0.2.0dev1
-+ PyTables >= 3.4.1
 
 To use GPU for language model training, you may need the following optional packages as well:
 

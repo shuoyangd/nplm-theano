@@ -10,7 +10,6 @@ import os.path
 import sys
 
 import numpy as np
-import tables
 import theano
 import theano.tensor as T
 
