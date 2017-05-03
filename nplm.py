@@ -42,7 +42,7 @@ parser.add_argument("--noise-sample-size", "-k", dest="noise_sample_size", type=
 parser.add_argument("--n-gram", "-n", dest="n_gram", type=int, metavar="INT", help="Size of the N-gram (default = 5).")
 parser.add_argument("--max-epoch", dest="max_epoch", type=int, metavar="INT", help="Maximum number of epochs should be performed during training (default = 5).")
 parser.add_argument("--batch-size", "-b", dest="batch_size", type=int, metavar="INT", help="Batch size (in sentences) of SGD (default = 1000).")
-parser.add_argument("--save-interval", dest="save_interval", type=int, metavar="INT", help="Saving model only for every several epochs (default = 1).")
+parser.add_argument("--save-interval", dest="save_interval", type=int, metavar="INT", help="Saving model only for every several updates (default = 100000).")
 
 parser.set_defaults(
   decay_rate=0.95,
@@ -213,7 +213,7 @@ def shuffle(indexed_ngrams, predictions):
   predictions_shuffled = predictions[arr]
   return (indexed_ngrams_shuffled, predictions_shuffled)
 
-def sgd(examples, net, options, epoch, noise_dist):
+def sgd(examples, net, vocab, options, epoch, noise_dist):
   logging.info("epoch {0} started".format(epoch))  
   instance_count = 0
   batch_count = 0
@@ -234,6 +234,9 @@ def sgd(examples, net, options, epoch, noise_dist):
       Y = []
       if batch_count % 1 == 0:
         logging.info("{0} instances seen".format(instance_count))
+      if batch_count % options.save_interval == 0:
+        logging.info("dumping models after {0} updates in epoch {1}".format(batch_count, epoch))
+    	dump(net, options.working_dir + "/nplm.model.iter{0}.{1}".format(batch_count, epoch), options, vocab)
   # N = np.array(rand.distint(noise_dist, (len(indexed_ngrams), options.noise_sample_size)))
   # total_loss = net.compute_loss(indexed_ngrams, predictions)
   # logging.info("epoch {0} finished with NCE loss {1}".format(epoch, total_loss))
@@ -310,10 +313,9 @@ def main(options):
   bos_index = vocab.index(BOS)
   for epoch in range(1, options.max_epoch + 1):
     examples = create_lazy_examples(trnz, bos_index) 
-    sgd(examples, net, options, epoch, unigram_dist)
-    if epoch % options.save_interval == 0:
-        logging.info("dumping models")
-    	dump(net, options.working_dir + "/nplm.model." + str(epoch), options, vocab)
+    sgd(examples, net, vocab, options, epoch, unigram_dist)
+    logging.info("dumping models after epoch {0}".format(epoch))
+    dump(net, options.working_dir + "/nplm.model.{0}".format(epoch), options, vocab)
   logging.info("training finished")
 
 if __name__ == "__main__":
